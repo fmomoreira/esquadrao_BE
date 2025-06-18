@@ -1,5 +1,5 @@
 // Variável que controla o ambiente de desenvolvimento
-const development = true;
+const development = false;
 
 
 
@@ -38,10 +38,10 @@ const prodConfig = {
   dialect: "postgres",
   timezone: "-03:00",
   host: "localhost",
-  port: 47833,
-  database: "zaplg",
-  username: "zaplg",
-  password: "infor@pgsql$27024",
+  port: 5432,
+  database: "eupromovo",
+  username: "postgre",
+  password: "EuPromovoTech2025@@BD",
   logging: process.env.DB_DEBUG === "true",
   pool: {
     max: 150,
