@@ -1,0 +1,35 @@
+# Estágio de construção
+FROM node:20.18-slim AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# ----------------------------
+# Estágio de produção
+FROM node:20.18-slim
+
+WORKDIR /app
+
+# Cria diretórios e configura permissões
+RUN mkdir -p /app/logs \
+     && mkdir /app/.pm2 \
+    && chown -R node:node /app \
+    && apt-get update \
+    && apt-get install -y curl \
+    && npm install -g pm2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/package*.json ./
+COPY --from=builder --chown=node:node /app/dist ./dist
+
+USER node
+
+EXPOSE 5099
+
+CMD ["pm2-runtime", "start", "dist/index.js", "--name", "app", "-i", "max", "--log", "/app/logs/app.log", "--error", "/app/logs/error.log", "--output", "/app/logs/out.log"]

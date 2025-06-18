@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    ports:
+      - "5099:5099"
+    environment:
+      - NODE_ENV=production
+      - PM2_HOME=/app/.pm2
+    volumes:
+      - /opt/topsystems/whatzapp/lgbackend/logs:/app/logs  # Logs da aplicação
+      - /opt/topsystems/whatzapp/lgbackend/pm2_data:/app/.pm2  # Dados do PM2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 30s
+      retries: 5
+
+volumes:
+  redis-data:
