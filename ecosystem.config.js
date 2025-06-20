@@ -3,7 +3,7 @@ require('dotenv').config();
 
 module.exports = {
   apps: [{
-    name: 'esquadrao-be',
+    name: 'eupromovo-be',
     script: './dist/server.js',
     cwd: __dirname,
     instances: 1,
