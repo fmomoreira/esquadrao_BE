@@ -19,8 +19,10 @@ Sentry.init({ dsn: process.env.SENTRY_DSN });
 const app = express();
 
 app.use(cors({
-  origin: '*',
-  credentials: true
+  origin: true, // This allows any origin and handles the Access-Control-Allow-Origin header properly
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.set("queues", {
