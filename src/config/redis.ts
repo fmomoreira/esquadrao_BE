@@ -3,15 +3,15 @@ const development = true;
 
 // Configurações do Redis para desenvolvimento e produção
 const redisConfig = {
-  // Em ambiente de desenvolvimento, usamos o Redis na porta padrão 6379
+  // Em ambiente de desenvolvimento, usamos o Redis na porta padrão 6377
   development: {
-    uri: process.env.REDIS_URI || "redis://127.0.0.1:6379",
+    uri: process.env.REDIS_URI || "redis://127.0.0.1:6377",
     limiterMax: process.env.REDIS_OPT_LIMITER_MAX || 1,
     limiterDuration: process.env.REDIS_OPT_LIMITER_DURATION || 3000
   },
   // Em produção, usamos a configuração original
   production: {
-    uri: process.env.REDIS_URI || "redis://127.0.0.1:6379",
+    uri: process.env.REDIS_URI || "redis://127.0.0.1:6377",
     limiterMax: process.env.REDIS_OPT_LIMITER_MAX || 1,
     limiterDuration: process.env.REDIS_OPT_LIMITER_DURATION || 3000
   }

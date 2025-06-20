@@ -19,7 +19,7 @@ module.exports = {
       DB_NAME: process.env.DB_NAME || 'zaplg',
       DB_USER: process.env.DB_USER || 'zaplg',
       DB_PASS: process.env.DB_PASS || 'infor@pgsql$27024',
-      REDIS_URI: process.env.REDIS_URI || 'redis://127.0.0.1:6379',
+      REDIS_URI: process.env.REDIS_URI || 'redis://127.0.0.1:6377',
       JWT_SECRET: process.env.JWT_SECRET,
       JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
       // Adicione outras variáveis de ambiente conforme necessário
