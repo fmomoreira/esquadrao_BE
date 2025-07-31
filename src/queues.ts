@@ -297,25 +297,29 @@ async function handleVerifyCampaigns(job) {
    */
   monitoringLogger.info(`[DEBUG] Verificando campanhas agendadas para a próxima hora...`);
   
-  const campaigns: { id: number; scheduledAt: string }[] =
+  const campaigns: { id: number; scheduledAt: string; dbNow: string }[] =
     await sequelize.query(
-      `select id, "scheduledAt" from "Campaigns" c
+      `select id, "scheduledAt", now() as "dbNow" from "Campaigns" c
     where "scheduledAt" between now() and now() + '1 hour'::interval and status = 'PROGRAMADA'`,
       { type: QueryTypes.SELECT }
     );
 
   if (campaigns.length > 0) {
     monitoringLogger.info(`[DEBUG] Campanhas encontradas: ${campaigns.length}`);
-    console.log(`[DEBUG] Campanhas encontradas:`, campaigns);
+    console.log(`[DEBUG] Campanhas encontradas:`, campaigns.map(c => c.id));
   } else {
     monitoringLogger.info(`[DEBUG] Nenhuma campanha encontrada para a próxima hora`);
   }
 
   for (let campaign of campaigns) {
     try {
-      const now = moment();
+      const dbNow = moment(campaign.dbNow);
       const scheduledAt = moment(campaign.scheduledAt);
-      const delay = scheduledAt.diff(now, "milliseconds");
+      let delay = scheduledAt.diff(dbNow, "milliseconds");
+
+      if (delay < 0) {
+        delay = 0;
+      }
       
       monitoringLogger.info(
         `[DEBUG] Campanha enviada para a fila de processamento: Campanha=${campaign.id}, Delay Inicial=${delay}, Horário Agendado=${scheduledAt.format('YYYY-MM-DD HH:mm:ss')}`
