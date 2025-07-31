@@ -1,9 +1,11 @@
+
 import { Request, Response } from "express";
 import fs from "fs";
 import { head } from "lodash";
 import path from "path";
 import * as Yup from "yup";
 import { getIO } from "../libs/socket";
+import moment from "moment";
 
 import CreateService from "../services/CampaignService/CreateService";
 import DeleteService from "../services/CampaignService/DeleteService";
@@ -60,7 +62,6 @@ export const index = async (req: Request, res: Response): Promise<Response> => {
 export const store = async (req: Request, res: Response): Promise<Response> => {
   const { companyId } = req.user;
   const data = req.body as StoreData;
-//  console.log('data------- store:', data);
 
   const schema = Yup.object().shape({
     name: Yup.string().required()
@@ -71,6 +72,11 @@ export const store = async (req: Request, res: Response): Promise<Response> => {
   } catch (err: any) {
     throw new AppError(err.message);
   }
+
+  const campaignData = {
+    ...data,
+    scheduledAt: moment.utc(data.scheduledAt).toDate()
+  };
 
   if (typeof data.tagListId === 'number') {
 
@@ -131,7 +137,7 @@ export const store = async (req: Request, res: Response): Promise<Response> => {
     createContactListFromTag(tagId)
       .then(async (contactListId) => {
         const record = await CreateService({
-          ...data,
+          ...campaignData,
           companyId,
           contactListId: contactListId,
         });
@@ -151,7 +157,7 @@ export const store = async (req: Request, res: Response): Promise<Response> => {
 
 
     const record = await CreateService({
-      ...data,
+      ...campaignData,
       companyId
     });
 
@@ -190,10 +196,15 @@ export const update = async (
     throw new AppError(err.message);
   }
 
+  const campaignData = {
+    ...data,
+    scheduledAt: moment.utc(data.scheduledAt).toDate()
+  };
+
   const { id } = req.params;
 
   const record = await UpdateService({
-    ...data,
+    ...campaignData,
     id
   });
 
