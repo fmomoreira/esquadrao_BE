@@ -291,58 +291,38 @@ async function handleSendScheduledMessage(job) {
 }
 
 async function handleVerifyCampaigns(job) {
-  /**
-   * @todo
-   * Implementar filtro de campanhas
-   */
-  monitoringLogger.info(`[DEBUG] Verificando campanhas agendadas para a próxima hora...`);
-  
-  const campaigns: { id: number; scheduledAt: string; delay: number }[] =
-    await sequelize.query(
-      `select 
-        id,
-        "scheduledAt",
-        EXTRACT(EPOCH FROM ("scheduledAt" - now())) * 1000 as delay
-      from "Campaigns" c
-      where "scheduledAt" between now() and now() + '1 hour'::interval and status = 'PROGRAMADA'`,
-      { type: QueryTypes.SELECT }
-    );
+  const sql = `
+    UPDATE "Campaigns"
+    SET status = 'AGENDADA'
+    WHERE id IN (
+      SELECT id FROM "Campaigns"
+      WHERE status = 'PROGRAMADA'
+      AND "scheduledAt" BETWEEN now() AND now() + '1 hour'::interval
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, EXTRACT(EPOCH FROM ("scheduledAt" - now())) * 1000 AS delay;
+  `;
 
-  if (campaigns.length > 0) {
-    monitoringLogger.info(`[DEBUG] Campanhas encontradas: ${campaigns.length}`);
-    console.log(`[DEBUG] Campanhas encontradas:`, campaigns.map(c => c.id));
-  } else {
-    monitoringLogger.info(`[DEBUG] Nenhuma campanha encontrada para a próxima hora`);
-  }
+  try {
+    const campaignsToSchedule: { id: number; delay: number }[] = await sequelize.query(sql, {
+      type: QueryTypes.SELECT
+    });
 
-  for (let campaign of campaigns) {
-    try {
-      let delay = campaign.delay;
-      if (delay < 0) {
-        delay = 0;
+    if (campaignsToSchedule.length > 0) {
+      logger.info(`Travando e agendando ${campaignsToSchedule.length} campanhas.`);
+      for (const campaign of campaignsToSchedule) {
+        const delay = Math.max(0, Math.floor(campaign.delay));
+        logger.info(`Enfileirando campanha ${campaign.id} com delay de ${delay}ms.`);
+        await campaignQueue.add(
+          "ProcessCampaign",
+          { id: campaign.id },
+          { delay, removeOnComplete: true }
+        );
       }
-      
-      monitoringLogger.info(
-        `[DEBUG] Campanha enviada para a fila de processamento: Campanha=${campaign.id}, Delay Inicial=${delay}, Horário Agendado=${campaign.scheduledAt}`
-      );
-      
-      const job = await campaignQueue.add(
-        "ProcessCampaign",
-        {
-          id: campaign.id
-        },
-        {
-          delay,
-          removeOnComplete: true
-        }
-      );
-      
-      monitoringLogger.info(`[DEBUG] Job adicionado com sucesso: ${job.id}`);
-    } catch (err: any) {
-      Sentry.captureException(err);
-      monitoringLogger.error(`[DEBUG] Erro ao processar campanha: ${err.message}`);
-      console.log(err.stack);
     }
+  } catch (err: any) {
+    Sentry.captureException(err);
+    logger.error("Erro ao verificar e agendar campanhas:", err);
   }
 }
 
