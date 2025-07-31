@@ -34,6 +34,12 @@ class CampaignShipping extends Model<CampaignShipping> {
   @Column
   confirmation: boolean;
 
+  @Column
+  messageId: string;
+
+  @Column
+  isDeliveredSuccessfully: number;
+
   @ForeignKey(() => ContactListItem)
   @Column
   contactId: number;

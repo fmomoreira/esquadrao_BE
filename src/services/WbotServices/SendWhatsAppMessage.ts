@@ -23,7 +23,7 @@ const SendWhatsAppMessage = async ({
   const wbot = await GetTicketWbot(ticket);
   const number = `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"
     }`;
-  console.log("number", number);
+  //console.log("number", number);
   if (quotedMsg) {
     const chatMessages = await Message.findOne({
       where: {
@@ -47,9 +47,9 @@ const SendWhatsAppMessage = async ({
   }
 
   try {
-    console.log('body:::::::::::::::::::::::::::', body)
+    //console.log('body:::::::::::::::::::::::::::', body)
     map_msg.set(ticket.contact.number, { lastSystemMsg: body })
-    console.log('lastSystemMsg:::::::::::::::::::::::::::', ticket.contact.number)
+    //console.log('lastSystemMsg:::::::::::::::::::::::::::', ticket.contact.number)
     const sentMessage = await wbot.sendMessage(number, {
       text: formatBody(body, ticket.contact)
     },
@@ -58,11 +58,11 @@ const SendWhatsAppMessage = async ({
       }
     );
     await ticket.update({ lastMessage: formatBody(body, ticket.contact) });
-    console.log("Message sent", sentMessage);
+    //console.log("Message sent", sentMessage);
     return sentMessage;
   } catch (err) {
     Sentry.captureException(err);
-    console.log(err);
+    //console.log(err);
     throw new AppError("ERR_SENDING_WAPP_MSG");
   }
 };

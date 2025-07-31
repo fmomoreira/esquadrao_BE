@@ -26,7 +26,7 @@ const ListUsersService = async ({
 
   let whereCondition = {};
 
-  console.log(typeof superUser)
+  //console.log(typeof superUser)
 
   if(superUser == "true"){
     whereCondition = {
@@ -58,8 +58,7 @@ const ListUsersService = async ({
       }
     };
   }
-
-  console.log(whereCondition)
+//console.log(whereCondition)
 
 
 

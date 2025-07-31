@@ -22,7 +22,7 @@ const ResetPassword = async (
         return { status: 404, message: "Token não encontrado" };
       }
     } catch (err) {
-      console.log(err);
+      //console.log(err);
     }
   }
 };

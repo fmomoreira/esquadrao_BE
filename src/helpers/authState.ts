@@ -27,7 +27,7 @@ const authState = async (
         session: JSON.stringify({ creds, keys }, BufferJSON.replacer, 0)
       });
     } catch (error) {
-      console.log(error);
+      //console.log(error);
     }
   };
 

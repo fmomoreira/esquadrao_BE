@@ -33,7 +33,7 @@ const GetDefaultWhatsApp = async (
     }
   }
 
-  console.log(connection)
+//  console.log(connection)
 
   if (!connection) {
     throw new AppError(`Nenhum Whatsapp conectado na empresa com o id ${companyId}`);

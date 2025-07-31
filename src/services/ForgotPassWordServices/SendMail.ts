@@ -223,9 +223,9 @@ a[x-apple-data-detectors] {
 </html>`
         };
         const info = await transporter.sendMail(mailOptions);
-        console.log("E-mail enviado: " + info.response);
+      //  console.log("E-mail enviado: " + info.response);
       } catch (error) {
-        console.log(error);
+      //  console.log(error);
       }
     }
     sendEmail();

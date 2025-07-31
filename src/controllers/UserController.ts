@@ -106,14 +106,14 @@ export const update = async (
     throw new AppError("ERR_NO_PERMISSION", 403);
   }
 
-  console.log("BATEu UPDATE")
+  //console.log("BATEu UPDATE")
 
   const { id: requestUserId} = req.user;
   const { userId  } = req.params;
   const userData = req.body;
   const companyIdParam = req.body.companyIdParam
 
-  console.log('USER DATA: ' + userData)
+ // console.log('USER DATA: ' + userData)
 
   let companyId = parseInt(companyIdParam)
 

@@ -119,7 +119,7 @@ export const provider = async (ticket: Ticket, msg: proto.IWebMessageInfo, compa
                         await sleep(2000)
                         await wbot.sendMessage(`${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`, textMessage);
                       } catch (error) {
-                        console.log('Não consegui enviar a mensagem!')
+                     //   console.log('Não consegui enviar a mensagem!')
                       }
                     } else {
                       let nome
@@ -240,7 +240,7 @@ export const provider = async (ticket: Ticket, msg: proto.IWebMessageInfo, compa
                         await sleep(2000)
                         fs.unlink(nomePDF, function (err) {
                           if (err) throw err;
-                          console.log(err);
+                          //console.log(err);
                         })
 
                         await UpdateTicketService({
@@ -250,7 +250,7 @@ export const provider = async (ticket: Ticket, msg: proto.IWebMessageInfo, compa
                         });
 
                       } catch (error) {
-                        console.log('11 Não consegui enviar a mensagem!')
+                        //console.log('11 Não consegui enviar a mensagem!')
                       }
                     }
                   })
@@ -260,7 +260,7 @@ export const provider = async (ticket: Ticket, msg: proto.IWebMessageInfo, compa
                       await sleep(2000)
                       await wbot.sendMessage(`${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`, bodyBoleto);
                     } catch (error) {
-                      console.log('111 Não consegui enviar a mensagem!')
+                     // console.log('111 Não consegui enviar a mensagem!')
                     }
 
                   });
@@ -675,7 +675,7 @@ export const provider = async (ticket: Ticket, msg: proto.IWebMessageInfo, compa
 
             axios.request(options as any).then(async function (response) {
               if (response.data.type === 'error') {
-                console.log("Error response", response.data.message);
+                //console.log("Error response", response.data.message);
                 const body = {
                   text: formatBody(`*Opss!!!!*\nOcorreu um erro! Digite *#* e fale com um *Atendente*!`, contact),
                 };

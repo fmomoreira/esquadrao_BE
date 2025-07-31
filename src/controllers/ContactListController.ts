@@ -141,47 +141,19 @@ export const findList = async (
 };
 
 export const upload = async (req: Request, res: Response) => {
-  try {
-    // Verificar se arquivos foram enviados
-    const files = req.files as Express.Multer.File[];
-    if (!files || files.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Nenhum arquivo foi enviado" 
-      });
-    }
+  const files = req.files as Express.Multer.File[];
+  const file: Express.Multer.File = head(files) as Express.Multer.File;
+  const { id } = req.params;
+  const { companyId } = req.user;
 
-    const file: Express.Multer.File = head(files) as Express.Multer.File;
-    if (!file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Arquivo inválido" 
-      });
-    }
+  const response = await ImportContacts(+id, companyId, file);
 
-    const { id } = req.params;
-    const { companyId } = req.user;
+  const io = getIO();
 
-    const response = await ImportContacts(+id, companyId, file);
+  io.to(`company-${companyId}-mainchannel`).emit(`company-${companyId}-ContactListItem-${+id}`, {
+    action: "reload",
+    records: response
+  });
 
-    const io = getIO();
-
-    io.to(`company-${companyId}-mainchannel`).emit(`company-${companyId}-ContactListItem-${+id}`, {
-      action: "reload",
-      records: response
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Arquivo processado com sucesso",
-      data: response
-    });
-  } catch (error: any) {
-    console.error("Erro ao processar upload:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Erro ao processar o arquivo",
-      error: error.toString()
-    });
-  }
+  return res.status(200).json(response);
 };

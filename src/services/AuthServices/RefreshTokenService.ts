@@ -27,10 +27,10 @@ export const RefreshTokenService = async (
   token: string
 ): Promise<Response> => {
 
-  console.log(token)
+ // console.log(token)
   try {
     const decoded = verify(token, authConfig.refreshSecret);
-    console.log(decoded)
+    //console.log(decoded)
     const { id, tokenVersion, companyId } = decoded as RefreshTokenPayload;
 
     const user = await ShowUserService(id);

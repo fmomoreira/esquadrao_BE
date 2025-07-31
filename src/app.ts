@@ -14,15 +14,17 @@ import { messageQueue, sendScheduledMessages } from "./queues";
 import routes from "./routes";
 import { logger } from "./utils/logger";
 
+import { metrics } from "./utils/metrics";
+
 Sentry.init({ dsn: process.env.SENTRY_DSN });
 
 const app = express();
 
+app.get("/metrics", metrics);
+
 app.use(cors({
-  origin: true, // This allows any origin and handles the Access-Control-Allow-Origin header properly
+  origin: "https://esquadrao.eupromovo.com.br",
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.set("queues", {

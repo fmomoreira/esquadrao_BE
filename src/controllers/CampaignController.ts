@@ -60,7 +60,7 @@ export const index = async (req: Request, res: Response): Promise<Response> => {
 export const store = async (req: Request, res: Response): Promise<Response> => {
   const { companyId } = req.user;
   const data = req.body as StoreData;
-  console.log('data------- store:', data);
+//  console.log('data------- store:', data);
 
   const schema = Yup.object().shape({
     name: Yup.string().required()
@@ -78,23 +78,31 @@ export const store = async (req: Request, res: Response): Promise<Response> => {
     const campanhaNome = data.name;
 
     async function createContactListFromTag(tagId) {
-
+      console.log(`[createContactListFromTag] Starting for tagId: ${tagId}`);
       const currentDate = new Date();
       const formattedDate = currentDate.toISOString();
 
       try {
+        console.log(`[createContactListFromTag] Finding ticket tags for tagId: ${tagId}`);
         const ticketTags = await TicketTag.findAll({ where: { tagId } });
         const ticketIds = ticketTags.map((ticketTag) => ticketTag.ticketId);
+        console.log(`[createContactListFromTag] Found ${ticketTags.length} ticket tags.`);
 
+        console.log(`[createContactListFromTag] Finding tickets for ${ticketIds.length} ticketIds.`);
         const tickets = await Ticket.findAll({ where: { id: ticketIds } });
         const contactIds = tickets.map((ticket) => ticket.contactId);
+        console.log(`[createContactListFromTag] Found ${tickets.length} tickets.`);
 
+        console.log(`[createContactListFromTag] Finding contacts for ${contactIds.length} contactIds.`);
         const contacts = await Contact.findAll({ where: { id: contactIds } });
+        console.log(`[createContactListFromTag] Found ${contacts.length} contacts.`);
 
         const randomName = `${campanhaNome} | TAG: ${tagId} - ${formattedDate}` // Implement your own function to generate a random name
+        console.log(`[createContactListFromTag] Creating contact list with name: ${randomName}`);
         const contactList = await ContactList.create({ name: randomName, companyId: companyId });
 
         const { id: contactListId } = contactList;
+        console.log(`[createContactListFromTag] Created contact list with id: ${contactListId}`);
 
         const contactListItems = contacts.map((contact) => ({
           name: contact.name,
@@ -106,9 +114,12 @@ export const store = async (req: Request, res: Response): Promise<Response> => {
 
         }));
 
+        console.log(`[createContactListFromTag] Bulk creating ${contactListItems.length} contact list items.`);
         await ContactListItem.bulkCreate(contactListItems);
+        console.log(`[createContactListFromTag] Bulk creation complete.`);
 
         // Return the ContactList ID
+        console.log(`[createContactListFromTag] Finished successfully for tagId: ${tagId}`);
         return contactListId;
       } catch (error) {
         console.error('Error creating contact list:', error);

@@ -6,12 +6,14 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   isJidBroadcast,
-  CacheStore
+  CacheStore,
+  WAMessageStatus
 } from "@whiskeysockets/baileys";
 import makeWALegacySocket from "@whiskeysockets/baileys";
 import P from "pino";
 
 import Whatsapp from "../models/Whatsapp";
+import CampaignShipping from "../models/CampaignShipping";
 import { logger } from "../utils/logger";
 import MAIN_LOGGER from "@whiskeysockets/baileys/lib/Utils/logger";
 import authState from "../helpers/authState";
@@ -299,7 +301,50 @@ export const initWASocket = async (whatsapp: Whatsapp): Promise<Session> => {
         );
         wsocket.ev.on("creds.update", saveState);
 
-        wsocket.ev.on("messages.upsert", () => {
+        wsocket.ev.on("messages.upsert", async ({ messages, type }) => {
+          logger.debug(`[wbot] messages.upsert event received. Type: ${type}`); // Log de evento
+          if (type === "append") {
+            for (const message of messages) {
+              logger.debug(`[wbot] Processing message. ID: ${message.key.id}, Status: ${message.status}, FromMe: ${message.key.fromMe}`); // Log de mensagem
+              if (message.key.fromMe) {
+                const messageId = message.key.id;
+                let isDeliveredSuccessfully = null;
+
+                if (message.status === WAMessageStatus.DELIVERY_ACK || message.status === WAMessageStatus.READ) {
+                  isDeliveredSuccessfully = true;
+                } else if (String(message.status) === "SERVER_ERROR" || String(message.status) === "REVOKED_BY_ME" || String(message.status) === "REVOKED_BY_SERVER") {
+                  isDeliveredSuccessfully = false;
+                }
+
+                if (isDeliveredSuccessfully !== null) {
+                  logger.debug(`[wbot] Status determined for messageId ${messageId}: ${isDeliveredSuccessfully}. Attempting to find CampaignShipping.`); // Log de status determinado
+                  try {
+                    const campaignShipping = await CampaignShipping.findOne({
+                      where: { messageId: messageId }
+                    });
+
+                    if (campaignShipping) {
+                      logger.debug(`[wbot] CampaignShipping found for messageId ${messageId}. Current isDeliveredSuccessfully: ${campaignShipping.isDeliveredSuccessfully}`); // Log de CampaignShipping encontrado
+                      if (campaignShipping.isDeliveredSuccessfully === null) {
+                        await campaignShipping.update({ isDeliveredSuccessfully: isDeliveredSuccessfully });
+                        logger.info(`[wbot] Updated CampaignShipping for messageId ${messageId} to isDeliveredSuccessfully: ${isDeliveredSuccessfully}`);
+                      } else {
+                        logger.debug(`[wbot] CampaignShipping for messageId ${messageId} already has a status (${campaignShipping.isDeliveredSuccessfully}). Skipping update.`); // Log de status já definido
+                      }
+                    } else {
+                      logger.debug(`[wbot] CampaignShipping not found for messageId: ${messageId}`); // Log de CampaignShipping não encontrado
+                    }
+                  } catch (error) {
+                    Sentry.captureException(error);
+                    logger.error(`[wbot] Error updating CampaignShipping status for messageId ${messageId}: ${error.message}`);
+                  }
+                } else {
+                  logger.debug(`[wbot] No relevant status for messageId ${messageId}. isDeliveredSuccessfully remains null.`); // Log de status não relevante
+                }
+              }
+            }
+          }
+
           store.chats.all().forEach(chat => {
             const chatMessages = store.messages[chat.id];
             if (chatMessages && chatMessages.array.length > MAX_MESSAGES) {
@@ -312,7 +357,7 @@ export const initWASocket = async (whatsapp: Whatsapp): Promise<Session> => {
       })();
     } catch (error) {
       Sentry.captureException(error);
-      console.log(error);
+      console.log("Error wbot POSSIVEL PROBLEMA COM VERSÃO DO BAILEYS",error);
       reject(error);
     }
   });

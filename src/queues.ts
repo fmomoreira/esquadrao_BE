@@ -26,6 +26,8 @@ import ShowFileService from "./services/FileServices/ShowService";
 import { getMessageOptions } from "./services/WbotServices/SendWhatsAppMedia";
 import { ClosedAllOpenTickets } from "./services/WbotServices/wbotClosedTickets";
 import { logger } from "./utils/logger";
+import { monitoringLogger } from "./utils/monitoringLogger";
+import { campaignShippingLogger } from "./utils/campaignShippingLogger";
 
 const nodemailer = require("nodemailer");
 const CronJob = require("cron").CronJob;
@@ -54,7 +56,7 @@ interface PrepareContactData {
 interface DispatchCampaignData {
   campaignId: number;
   campaignShippingId: number;
-  contactListItemId: number;
+  contactId: number;
 }
 
 export const userMonitor = new BullQueue("UserMonitor", connection);
@@ -96,8 +98,9 @@ async function handleSendMessage(job) {
   }
 }
 
-{
-  /*async function handleVerifyQueue(job) {
+// Commented out handleVerifyQueue function - not currently used
+/*
+async function handleVerifyQueue(job) {
   logger.info("Buscando atendimentos perdidos nas filas");
   try {
     const companies = await Company.findAll({
@@ -110,24 +113,21 @@ async function handleSendMessage(job) {
       },
       include: [
         {
-          model: Whatsapp, attributes: ["id", "name", "status", "timeSendQueue", "sendIdQueue"], where: {
+          model: Whatsapp, 
+          attributes: ["id", "name", "status", "timeSendQueue", "sendIdQueue"], 
+          where: {
             timeSendQueue: {
               [Op.gt]: 0
             }
           }
         },
       ]
-    }); */
-}
+    });
 
-{
-  /*    companies.map(async c => {
+    companies.map(async c => {
       c.whatsapps.map(async w => {
-
         if (w.status === "CONNECTED") {
-
           var companyId = c.id;
-
           const moveQueue = w.timeSendQueue ? w.timeSendQueue : 0;
           const moveQueueId = w.sendIdQueue;
           const moveQueueTime = moveQueue;
@@ -135,12 +135,9 @@ async function handleSendMessage(job) {
           const timeQueue = moveQueueTime;
 
           if (moveQueue > 0) {
-
             if (!isNaN(idQueue) && Number.isInteger(idQueue) && !isNaN(timeQueue) && Number.isInteger(timeQueue)) {
-
               const tempoPassado = moment().subtract(timeQueue, "minutes").utc().format();
-              // const tempoAgora = moment().utc().format();
-
+              
               const { count, rows: tickets } = await Ticket.findAndCountAll({
                 where: {
                   status: "pending",
@@ -179,11 +176,6 @@ async function handleSendMessage(job) {
                       ticketId: ticket.id
                     });
 
-                  // io.to("pending").emit(`company-${companyId}-ticket`, {
-                  //   action: "update",
-                  //   ticket,
-                  // });
-
                   logger.info(`Atendimento Perdido: ${ticket.id} - Empresa: ${companyId}`);
                 });
               } else {
@@ -201,8 +193,8 @@ async function handleSendMessage(job) {
     logger.error("SearchForQueue -> VerifyQueue: error", e.message);
     throw e;
   }
-}; */
 }
+*/
 
 async function handleCloseTicketsAutomatic() {
   const job = new CronJob("*/1 * * * *", async () => {
@@ -303,6 +295,8 @@ async function handleVerifyCampaigns(job) {
    * @todo
    * Implementar filtro de campanhas
    */
+  monitoringLogger.info(`[DEBUG] Verificando campanhas agendadas para a próxima hora...`);
+  
   const campaigns: { id: number; scheduledAt: string }[] =
     await sequelize.query(
       `select id, "scheduledAt" from "Campaigns" c
@@ -310,29 +304,39 @@ async function handleVerifyCampaigns(job) {
       { type: QueryTypes.SELECT }
     );
 
-  if (campaigns.length > 0)
-    logger.info(`Campanhas encontradas: ${campaigns.length}`);
+  if (campaigns.length > 0) {
+    monitoringLogger.info(`[DEBUG] Campanhas encontradas: ${campaigns.length}`);
+    console.log(`[DEBUG] Campanhas encontradas:`, campaigns);
+  } else {
+    monitoringLogger.info(`[DEBUG] Nenhuma campanha encontrada para a próxima hora`);
+  }
 
   for (let campaign of campaigns) {
     try {
       const now = moment();
       const scheduledAt = moment(campaign.scheduledAt);
       const delay = scheduledAt.diff(now, "milliseconds");
-      logger.info(
-        `Campanha enviada para a fila de processamento: Campanha=${campaign.id}, Delay Inicial=${delay}`
+      
+      monitoringLogger.info(
+        `[DEBUG] Campanha enviada para a fila de processamento: Campanha=${campaign.id}, Delay Inicial=${delay}, Horário Agendado=${scheduledAt.format('YYYY-MM-DD HH:mm:ss')}`
       );
-      campaignQueue.add(
+      
+      const job = await campaignQueue.add(
         "ProcessCampaign",
         {
-          id: campaign.id,
-          delay
+          id: campaign.id
         },
         {
+          delay,
           removeOnComplete: true
         }
       );
+      
+      monitoringLogger.info(`[DEBUG] Job adicionado com sucesso: ${job.id}`);
     } catch (err: any) {
       Sentry.captureException(err);
+      monitoringLogger.error(`[DEBUG] Erro ao processar campanha: ${err.message}`);
+      console.log(err.stack);
     }
   }
 }
@@ -343,15 +347,7 @@ async function getCampaign(id) {
       {
         model: ContactList,
         as: "contactList",
-        attributes: ["id", "name"],
-        include: [
-          {
-            model: ContactListItem,
-            as: "contacts",
-            attributes: ["id", "name", "number", "email", "isWhatsappValid"],
-            where: { isWhatsappValid: true }
-          }
-        ]
+        attributes: ["id", "name"]
       },
       {
         model: Whatsapp,
@@ -379,9 +375,9 @@ async function getSettings(campaign) {
     attributes: ["key", "value"]
   });
 
-  let messageInterval: number = 20;
+  let messageInterval: number = 90;
   let longerIntervalAfter: number = 20;
-  let greaterInterval: number = 60;
+  let greaterInterval: number = 180;
   let variables: any[] = [];
 
   settings.forEach(setting => {
@@ -524,15 +520,16 @@ export function randomValue(min, max) {
 }
 
 async function verifyAndFinalizeCampaign(campaign) {
-  const { contacts } = campaign.contactList;
-
-  const count1 = contacts.length;
+  const count1 = await ContactListItem.count({
+    where: {
+      contactListId: campaign.contactList.id,
+      isWhatsappValid: true
+    }
+  });
   const count2 = await CampaignShipping.count({
     where: {
       campaignId: campaign.id,
-      deliveredAt: {
-        [Op.not]: null
-      }
+      isDeliveredSuccessfully: { [Op.not]: null }
     }
   });
 
@@ -550,75 +547,106 @@ async function verifyAndFinalizeCampaign(campaign) {
   );
 }
 
-function calculateDelay(
-  index,
-  baseDelay,
-  longerIntervalAfter,
-  greaterInterval,
-  messageInterval
-) {
-  const diffSeconds = differenceInSeconds(baseDelay, new Date());
-  if (index > longerIntervalAfter) {
-    return diffSeconds * 1000 + greaterInterval;
-  } else {
-    return diffSeconds * 1000 + messageInterval;
-  }
-}
+
 
 async function handleProcessCampaign(job) {
   try {
     const { id }: ProcessCampaignData = job.data;
+    monitoringLogger.info(`[DEBUG] Processando campanha: ${id}`);
+    
     const campaign = await getCampaign(id);
+    if (!campaign) {
+      monitoringLogger.error(`[DEBUG] Campanha não encontrada: ${id}`);
+      return;
+    }
+    
+    monitoringLogger.info(`[DEBUG] Campanha encontrada: ${id}, status: ${campaign.status}`);
+    
     const settings = await getSettings(campaign);
     if (campaign) {
-      const { contacts } = campaign.contactList;
-      if (isArray(contacts)) {
+      const contactListId = campaign.contactList.id;
+      if (!contactListId) {
+        monitoringLogger.error(`[DEBUG] ID da lista de contatos não encontrada para campanha: ${id}`);
+        return;
+      }
+      
+      const BATCH_SIZE = 100; // Define o tamanho do lote
+      let offset = 0;
+      let hasMoreContacts = true;
+
+      while (hasMoreContacts) {
+        const { count, rows: contacts } = await ContactListItem.findAndCountAll({
+          where: { contactListId, isWhatsappValid: true },
+          limit: BATCH_SIZE,
+          offset: offset,
+          order: [['id', 'ASC']]
+        });
+
+        if (contacts.length === 0) {
+          hasMoreContacts = false;
+          break;
+        }
+
+        monitoringLogger.info(`[DEBUG] Contatos encontrados no lote (offset: ${offset}): ${contacts.length} para campanha: ${id}`);
+      
         const contactData = contacts.map(contact => ({
           contactId: contact.id,
           campaignId: campaign.id,
           variables: settings.variables
         }));
 
-        // const baseDelay = job.data.delay || 0;
-        const longerIntervalAfter = parseToMilliseconds(
-          settings.longerIntervalAfter
-        );
-        const greaterInterval = parseToMilliseconds(settings.greaterInterval);
-        const messageInterval = settings.messageInterval;
+        const {
+          messageInterval,
+          longerIntervalAfter,
+          greaterInterval,
+          variables
+        } = settings;
 
-        let baseDelay = campaign.scheduledAt;
-
+        let delay = 0;
         const queuePromises = [];
         for (let i = 0; i < contactData.length; i++) {
-          baseDelay = addSeconds(
-            baseDelay,
-            i > longerIntervalAfter ? greaterInterval : messageInterval
-          );
+          const { contactId, campaignId } = contactData[i];
 
-          const { contactId, campaignId, variables } = contactData[i];
-          const delay = calculateDelay(
-            i,
-            baseDelay,
-            longerIntervalAfter,
-            greaterInterval,
-            messageInterval
-          );
+          if (i > 0) {
+            if (longerIntervalAfter > 0 && i % longerIntervalAfter === 0) {
+              delay += greaterInterval;
+            } else {
+              delay += messageInterval;
+            }
+          }
+
+          monitoringLogger.info(`[handleProcessCampaign] Adicionando job 'PrepareContact' para o contato ${contactId} na fila.`);
           const queuePromise = campaignQueue.add(
             "PrepareContact",
-            { contactId, campaignId, variables, delay },
+            { contactId, campaignId, variables, delay: delay * 1000 }, // convertendo para milissegundos
             { removeOnComplete: true }
           );
+          monitoringLogger.info(`[handleProcessCampaign] Job 'PrepareContact' para o contato ${contactId} adicionado com sucesso.`);
+
           queuePromises.push(queuePromise);
-          logger.info(
+          monitoringLogger.info(
             `Registro enviado pra fila de disparo: Campanha=${campaign.id};Contato=${contacts[i].name};delay=${delay}`
           );
         }
         await Promise.all(queuePromises);
-        await campaign.update({ status: "EM_ANDAMENTO" });
+        monitoringLogger.info(`[DEBUG] Todos os jobs PrepareContact do lote adicionados para campanha: ${campaign.id}`);
+        campaignShippingLogger.info(`[Campanha: ${campaign.id}] Lote de ${contacts.length} contatos (offset: ${offset}) enviado para a fila de preparação.`);
+        
+        offset += BATCH_SIZE;
       }
+      
+      monitoringLogger.info(`[DEBUG] Todos os jobs PrepareContact adicionados para campanha: ${campaign.id}`);
+      campaignShippingLogger.info(`[Campanha: ${campaign.id}] Todos os contatos da campanha foram enviados para a fila de preparação.`);
+
+      await campaign.update({ status: "EM_ANDAMENTO" });
+      monitoringLogger.info(`[DEBUG] Status da campanha atualizado para EM_ANDAMENTO: ${campaign.id}`);
+    } else {
+      monitoringLogger.error(`[DEBUG] Campanha inválida: ${id}`);
     }
   } catch (err: any) {
     Sentry.captureException(err);
+    monitoringLogger.error(`[DEBUG] Erro ao processar campanha: ${err.message}`);
+    console.log(err.stack);
   }
 }
 
@@ -627,13 +655,28 @@ async function handlePrepareContact(job) {
   try {
     const { contactId, campaignId, delay, variables }: PrepareContactData =
       job.data;
+    
+    monitoringLogger.info(`[DEBUG] Preparando contato: contactId=${contactId}, campaignId=${campaignId}, delay=${delay}`);
+    
     const campaign = await getCampaign(campaignId);
+    if (!campaign) {
+      monitoringLogger.error(`[DEBUG] Campanha não encontrada ao preparar contato: ${campaignId}`);
+      return;
+    }
+    
     const contact = await getContact(contactId);
+    if (!contact) {
+      monitoringLogger.error(`[DEBUG] Contato não encontrado: ${contactId} para campanha: ${campaignId}`);
+      return;
+    }
+    
+    monitoringLogger.info(`[DEBUG] Contato encontrado: ${contact.name} (${contact.number}) para campanha: ${campaignId}`);
 
     const campaignShipping: any = {};
     campaignShipping.number = contact.number;
     campaignShipping.contactId = contactId;
     campaignShipping.campaignId = campaignId;
+    campaignShipping.isDeliveredSuccessfully = null;
 
     const messages = getCampaignValidMessages(campaign);
     if (messages.length) {
@@ -665,6 +708,8 @@ async function handlePrepareContact(job) {
       }
     }
 
+    monitoringLogger.info(`[DEBUG] Tentando criar/encontrar registro em CampaignShipping: campaignId=${campaignShipping.campaignId}, contactId=${campaignShipping.contactId}`);
+    
     const [record, created] = await CampaignShipping.findOrCreate({
       where: {
         campaignId: campaignShipping.campaignId,
@@ -672,6 +717,9 @@ async function handlePrepareContact(job) {
       },
       defaults: campaignShipping
     });
+    
+    campaignShippingLogger.info(`[Campanha: ${campaignId} | Contato: ${contact.id}] Registro em CampaignShipping ${created ? 'CRIADO' : 'ENCONTRADO'}. ID: ${record.id}`);
+    monitoringLogger.info(`[DEBUG] Registro em CampaignShipping ${created ? 'criado' : 'encontrado'}: id=${record.id}`);
 
     if (
       !created &&
@@ -686,82 +734,86 @@ async function handlePrepareContact(job) {
       record.deliveredAt === null &&
       record.confirmationRequestedAt === null
     ) {
+      monitoringLogger.info(`[DEBUG] Adicionando job DispatchCampaign para: campaignId=${campaign.id}, campaignShippingId=${record.id}, delay=${delay}`);
       const nextJob = await campaignQueue.add(
         "DispatchCampaign",
         {
           campaignId: campaign.id,
           campaignShippingId: record.id,
-          contactListItemId: contactId
+          contactId: contactId
         },
         {
           delay
         }
       );
 
+      monitoringLogger.info(`[DEBUG] Job DispatchCampaign adicionado com sucesso: ${nextJob.id}`);
       await record.update({ jobId: nextJob.id.toString() });
+      monitoringLogger.info(`[DEBUG] Registro CampaignShipping atualizado com jobId: ${nextJob.id}`);
+    } else {
+      monitoringLogger.info(`[DEBUG] Registro já processado, não adicionando job DispatchCampaign: campaignId=${campaign.id}, campaignShippingId=${record.id}`);
     }
-
-    await verifyAndFinalizeCampaign(campaign);
   } catch (err: any) {
     Sentry.captureException(err);
-    logger.error(`campaignQueue -> PrepareContact -> error: ${err.message}`);
+    monitoringLogger.error(`campaignQueue -> PrepareContact -> error: ${err.message}`);
   }
 }
 
 async function handleDispatchCampaign(job) {
+  const { data } = job;
+  const { campaignShippingId, campaignId }: DispatchCampaignData = data;
+  let campaignShipping: CampaignShipping | null = null;
+
   try {
-    const { data } = job;
-    const { campaignShippingId, campaignId }: DispatchCampaignData = data;
     const campaign = await getCampaign(campaignId);
     const wbot = await GetWhatsappWbot(campaign.whatsapp);
 
     if (!wbot) {
-      logger.error(
+      monitoringLogger.error(
         `campaignQueue -> DispatchCampaign -> error: wbot not found`
       );
-      return;
+      throw new Error("Wbot not found");
     }
 
     if (!campaign.whatsapp) {
-      logger.error(
+      monitoringLogger.error(
         `campaignQueue -> DispatchCampaign -> error: whatsapp not found`
       );
-      return;
+      throw new Error("Whatsapp not found for campaign");
     }
 
     if (!wbot?.user?.id) {
-      logger.error(
+      monitoringLogger.error(
         `campaignQueue -> DispatchCampaign -> error: wbot user not found`
       );
-      return;
+      throw new Error("Wbot user not found");
     }
 
-    logger.info(
+    monitoringLogger.info(
       `Disparo de campanha solicitado: Campanha=${campaignId};Registro=${campaignShippingId}`
     );
 
-    const campaignShipping = await CampaignShipping.findByPk(
+    campaignShipping = await CampaignShipping.findByPk(
       campaignShippingId,
       {
         include: [{ model: ContactListItem, as: "contact" }]
       }
     );
 
-    const chatId = `${campaignShipping.number}@s.whatsapp.net`;
-
-    let body = campaignShipping.message;
-
-    if (campaign.confirmation && campaignShipping.confirmation === null) {
-      body = campaignShipping.confirmationMessage;
-    }
-
-    const campaignShippingg = await CampaignShipping.findByPk(
-      campaignShippingId
-    );
-    if (campaignShippingg.deliveredAt) {
-      logger.info(`Mensagem já enviada para ${campaignShippingId}`);
+    if (!campaignShipping) {
+      monitoringLogger.error(`[DispatchCampaign] CampaignShipping not found for ID: ${campaignShippingId}`);
       return;
     }
+
+    if (campaignShipping.deliveredAt) {
+      monitoringLogger.info(`MONITORANTO: ===================Mensagem já enviada para================== ${campaignShippingId}`);
+      return;
+    }
+
+    // Definir variáveis necessárias
+    const chatId = `${campaignShipping.number}@c.us`;
+    let body = campaignShipping.message || "";
+    let sentMessageResult;
 
     if (!isNil(campaign.fileListId)) {
       try {
@@ -777,10 +829,12 @@ async function handleDispatchCampaign(job) {
             path.resolve(folder, file.path),
             file.name
           );
-          await wbot.sendMessage(chatId, { ...options });
+          sentMessageResult = await wbot.sendMessage(chatId, { ...options });
+          monitoringLogger.debug(`[DispatchCampaign] Media message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
         }
       } catch (error) {
-        logger.info(error);
+        monitoringLogger.info(error);
+        throw error;
       }
     }
 
@@ -794,40 +848,69 @@ async function handleDispatchCampaign(job) {
         body
       );
       if (Object.keys(options).length) {
-        await wbot.sendMessage(chatId, { ...options });
+        sentMessageResult = await wbot.sendMessage(chatId, { ...options });
+        monitoringLogger.debug(`[DispatchCampaign] Media message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
       }
     } else {
       if (campaign.confirmation && campaignShipping.confirmation === null) {
-        await wbot.sendMessage(chatId, {
+        sentMessageResult = await wbot.sendMessage(chatId, {
           text: body
         });
+        monitoringLogger.debug(`[DispatchCampaign] Confirmation message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
         await campaignShipping.update({ confirmationRequestedAt: moment() });
       } else {
-        await wbot.sendMessage(chatId, {
+        sentMessageResult = await wbot.sendMessage(chatId, {
           text: body
         });
+        monitoringLogger.debug(`[DispatchCampaign] Text message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
       }
     }
-    await campaignShipping.update({ deliveredAt: moment() });
+
+    const messageIdToStore = sentMessageResult?.key?.id || null;
+    monitoringLogger.debug(`[DispatchCampaign] messageId to store: ${messageIdToStore}`);
+
+    // Atualiza CampaignShipping com status de sucesso ou falha de envio
+    await campaignShipping.update({
+      deliveredAt: moment(),
+      messageId: messageIdToStore,
+      isDeliveredSuccessfully: messageIdToStore !== null ? 1 : 0
+    });
+
+    campaignShippingLogger.info(`[Campanha: ${campaignId} | Contato: ${campaignShipping.contact.id}] Mensagem enviada com sucesso. MessageId: ${messageIdToStore}`);
 
     await verifyAndFinalizeCampaign(campaign);
 
     const io = getIO();
-    io.to(`company-${campaign.companyId}-mainchannel`).emit(
-      `company-${campaign.companyId}-campaign`,
+    io.to(`company-${campaign.id}-mainchannel`).emit(
+      `company-${campaign.id}-campaign`,
       {
         action: "update",
         record: campaign
       }
     );
 
-    logger.info(
+    monitoringLogger.info(
       `Campanha enviada para: Campanha=${campaignId};Contato=${campaignShipping.contact.name}`
     );
   } catch (err: any) {
     Sentry.captureException(err);
-    logger.error(err.message);
+    monitoringLogger.error(`[DispatchCampaign] Error sending message for CampaignShipping ${campaignShippingId}: ${err.message}`);
     console.log(err.stack);
+
+    // Se ocorreu um erro, atualiza CampaignShipping para refletir a falha
+    if (campaignShipping) {
+      try {
+        await campaignShipping.update({
+          deliveredAt: moment(),
+          isDeliveredSuccessfully: 0,
+          messageId: null
+        });
+        monitoringLogger.info(`[DispatchCampaign] CampaignShipping ${campaignShipping.id} marked as failed due to error.`);
+      } catch (updateErr: any) {
+        Sentry.captureException(updateErr);
+        monitoringLogger.error(`[DispatchCampaign] Error updating CampaignShipping to failed status for ID ${campaignShippingId}: ${updateErr.message}`);
+      }
+    }
   }
 }
 
@@ -839,8 +922,10 @@ async function handleLoginStatus(job) {
   for (let item of users) {
     try {
       const user = await User.findByPk(item.id);
-      await user.update({ online: false });
-      logger.info(`Usuário passado para offline: ${item.id}`);
+      if (user) {
+        await user.update({ online: false });
+        logger.info(`Usuário passado para offline: ${item.id}`);
+      }
     } catch (e: any) {
       Sentry.captureException(e);
     }
@@ -873,7 +958,7 @@ async function handleInvoiceCreate() {
         if (invoice[0]["mycount"] > 0) {
         } else {
           const sql = `INSERT INTO "Invoices" (detail, status, value, "updatedAt", "createdAt", "dueDate", "companyId")
-          VALUES ('${plan.name}', 'open', '${plan.value}', '${timestamp}', '${timestamp}', '${date}', ${c.id});`;
+            VALUES ('${plan.name}', 'open', '${plan.value}', '${timestamp}', '${timestamp}', '${date}', ${c.id});`;
 
           const invoiceInsert = await sequelize.query(sql, {
             type: QueryTypes.INSERT
@@ -918,8 +1003,40 @@ handleCloseTicketsAutomatic();
 
 handleInvoiceCreate();
 
+async function handleVerifyAndFinalizeCampaigns(job) {
+  monitoringLogger.info(`[DEBUG] Verificando campanhas para finalização...`);
+
+  const campaigns = await Campaign.findAll({
+    where: {
+      status: "EM_ANDAMENTO"
+    }
+  });
+
+  for (const campaign of campaigns) {
+    try {
+      await verifyAndFinalizeCampaign(campaign);
+      monitoringLogger.info(`[DEBUG] Verificação de finalização para campanha ${campaign.id} concluída.`);
+    } catch (err: any) {
+      Sentry.captureException(err);
+      monitoringLogger.error(`[DEBUG] Erro ao verificar e finalizar campanha ${campaign.id}: ${err.message}`);
+    }
+  }
+}
+
 export async function startQueueProcess() {
   logger.info("Iniciando processamento de filas");
+
+  campaignQueue.on('error', (error) => {
+    logger.error('A CampaignQueue error has occurred: ', error);
+  });
+
+  campaignQueue.on('failed', (job, err) => {
+    logger.error(`Job ${job.id} in CampaignQueue failed with error: `, err);
+  });
+
+  campaignQueue.on('stalled', (job) => {
+    logger.warn(`Job ${job.id} in CampaignQueue has stalled.`);
+  });
 
   messageQueue.process("SendMessage", handleSendMessage);
 
@@ -933,7 +1050,9 @@ export async function startQueueProcess() {
 
   campaignQueue.process("PrepareContact", handlePrepareContact);
 
-  campaignQueue.process("DispatchCampaign", 1,handleDispatchCampaign);
+  campaignQueue.process("DispatchCampaign", 1, handleDispatchCampaign);
+
+  campaignQueue.process("VerifyAndFinalizeCampaigns", handleVerifyAndFinalizeCampaigns);
 
   userMonitor.process("VerifyLoginStatus", handleLoginStatus);
 
@@ -953,6 +1072,15 @@ export async function startQueueProcess() {
     {},
     {
       repeat: { cron: "*/20 * * * * *", key: "verify-campaing" },
+      removeOnComplete: true
+    }
+  );
+
+  campaignQueue.add(
+    "VerifyAndFinalizeCampaigns",
+    {},
+    {
+      repeat: { cron: "*/10 * * * *", key: "verify-and-finalize-campaigns" }, // A cada 10 minutos
       removeOnComplete: true
     }
   );

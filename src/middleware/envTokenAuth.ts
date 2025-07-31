@@ -23,7 +23,7 @@ const envTokenAuth = (
       return next();
     }
   } catch (e) {
-    console.log(e);
+   // console.log(e);
   }
 
   throw new AppError("Token inválido", 403);

@@ -58,7 +58,7 @@ const UpdateTicketService = async ({
     let useIntegration: boolean | null = ticketData.useIntegration || false;
     let integrationId: number | null = ticketData.integrationId || null;
 
-    console.log("ticketData", ticketData);
+ //    console.log("ticketData", ticketData);
 
     const io = getIO();
 
