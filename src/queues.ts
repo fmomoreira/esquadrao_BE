@@ -297,10 +297,14 @@ async function handleVerifyCampaigns(job) {
    */
   monitoringLogger.info(`[DEBUG] Verificando campanhas agendadas para a próxima hora...`);
   
-  const campaigns: { id: number; scheduledAt: string; dbNow: string }[] =
+  const campaigns: { id: number; scheduledAt: string; delay: number }[] =
     await sequelize.query(
-      `select id, "scheduledAt", now() as "dbNow" from "Campaigns" c
-    where "scheduledAt" between now() and now() + '1 hour'::interval and status = 'PROGRAMADA'`,
+      `select 
+        id,
+        "scheduledAt",
+        EXTRACT(EPOCH FROM ("scheduledAt" - now())) * 1000 as delay
+      from "Campaigns" c
+      where "scheduledAt" between now() and now() + '1 hour'::interval and status = 'PROGRAMADA'`,
       { type: QueryTypes.SELECT }
     );
 
@@ -313,16 +317,13 @@ async function handleVerifyCampaigns(job) {
 
   for (let campaign of campaigns) {
     try {
-      const dbNow = moment(campaign.dbNow);
-      const scheduledAt = moment(campaign.scheduledAt);
-      let delay = scheduledAt.diff(dbNow, "milliseconds");
-
+      let delay = campaign.delay;
       if (delay < 0) {
         delay = 0;
       }
       
       monitoringLogger.info(
-        `[DEBUG] Campanha enviada para a fila de processamento: Campanha=${campaign.id}, Delay Inicial=${delay}, Horário Agendado=${scheduledAt.format('YYYY-MM-DD HH:mm:ss')}`
+        `[DEBUG] Campanha enviada para a fila de processamento: Campanha=${campaign.id}, Delay Inicial=${delay}, Horário Agendado=${campaign.scheduledAt}`
       );
       
       const job = await campaignQueue.add(
