@@ -347,11 +347,6 @@ async function getCampaign(id) {
         model: Whatsapp,
         as: "whatsapp",
         attributes: ["id", "name"]
-      },
-      {
-        model: CampaignShipping,
-        as: "shipping",
-        include: [{ model: ContactListItem, as: "contact" }]
       }
     ]
   });
