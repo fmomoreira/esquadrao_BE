@@ -306,7 +306,7 @@ async function handleVerifyCampaigns(job) {
     WHERE id IN (
       SELECT id FROM "Campaigns"
       WHERE status = 'PROGRAMADA'
-      AND "scheduledAt" BETWEEN now() AND now() + '1 hour'::interval
+      AND "scheduledAt" > now()
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id, EXTRACT(EPOCH FROM ("scheduledAt" - now())) * 1000 AS delay;
