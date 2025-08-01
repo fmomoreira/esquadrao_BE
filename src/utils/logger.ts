@@ -1,29 +1,38 @@
-import winston from "winston";
+import pino from "pino";
 import path from "path";
 
 const logDir = process.cwd();
 
-const logger = winston.createLogger({
-  level: "info",
-  format: winston.format.combine(
-    winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss.SSS" }),
-    winston.format.printf(({ timestamp, level, message, ...meta }) => {
-      return `${timestamp} [${level.toUpperCase()}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''}`;
-    })
-  ),
-  transports: [
-    new winston.transports.File({
-      filename: path.join(logDir, "logSistema.txt"),
-      maxsize: 5242880, // 5MB
-      maxFiles: 5,
-    }),
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      )
-    })
-  ]
+// Configura o pino para ter múltiplos destinos (transportes).
+// Isso resolve o erro de compilação com a biblioteca Baileys e atende ao requisito de salvar logs em arquivo.
+const logger = pino({
+  // Define o nível de log mais baixo para garantir que tudo seja capturado.
+  // O nível de cada transporte (console, arquivo) será definido individualmente.
+  level: "silly", 
+  transport: {
+    targets: [
+      {
+        // Configuração para o console (saída padrão)
+        target: 'pino-pretty', // Usa o pino-pretty para uma visualização amigável
+        level: 'info', // Mostra apenas logs de nível 'info' e superiores no console
+        options: {
+          colorize: true,
+          levelFirst: true,
+          translateTime: "SYS:yyyy-mm-dd HH:MM:ss.l",
+          ignore: 'pid,hostname' // Ignora campos desnecessários no console
+        }
+      },
+      {
+        // Configuração para o arquivo de log
+        target: 'pino/file',
+        level: 'silly', // Grava todos os níveis de log no arquivo, incluindo 'trace' do Baileys
+        options: { 
+          destination: path.join(logDir, "logSistema.txt"),
+          mkdir: true // Cria o diretório se ele não existir
+        }
+      }
+    ]
+  }
 });
 
 export { logger };
