@@ -59,24 +59,33 @@ interface DispatchCampaignData {
   contactId: number;
 }
 
-export const userMonitor = new BullQueue("UserMonitor", connection);
+const defaultJobOptions = {
+  removeOnComplete: true,
+  removeOnFail: true,
+  attempts: 3, // Tenta executar o job até 3 vezes em caso de erro
+  backoff: { type: 'exponential', delay: 1000 } // Aumenta o tempo de espera entre as tentativas
+};
 
-export const queueMonitor = new BullQueue("QueueMonitor", connection);
+export const userMonitor = new BullQueue("UserMonitor", connection, { defaultJobOptions });
+
+export const queueMonitor = new BullQueue("QueueMonitor", connection, { defaultJobOptions });
 
 export const messageQueue = new BullQueue("MessageQueue", connection, {
   limiter: {
     max: limiterMax as number,
     duration: limiterDuration as number
-  }
+  },
+  defaultJobOptions
 });
 
-export const scheduleMonitor = new BullQueue("ScheduleMonitor", connection);
+export const scheduleMonitor = new BullQueue("ScheduleMonitor", connection, { defaultJobOptions });
 export const sendScheduledMessages = new BullQueue(
   "SendSacheduledMessages",
-  connection
+  connection,
+  { defaultJobOptions }
 );
 
-export const campaignQueue = new BullQueue("CampaignQueue", connection);
+export const campaignQueue = new BullQueue("CampaignQueue", connection, { defaultJobOptions });
 
 async function handleSendMessage(job) {
   try {
@@ -316,7 +325,7 @@ async function handleVerifyCampaigns(job) {
         await campaignQueue.add(
           "ProcessCampaign",
           { id: campaign.id },
-          { delay, removeOnComplete: true }
+          { delay }
         );
       }
     }
@@ -604,7 +613,6 @@ async function handleProcessCampaign(job) {
           const queuePromise = campaignQueue.add(
             "PrepareContact",
             { contactId, campaignId, variables, delay: delay * 1000 }, // convertendo para milissegundos
-            { removeOnComplete: true }
           );
           monitoringLogger.info(`[handleProcessCampaign] Job 'PrepareContact' para o contato ${contactId} adicionado com sucesso.`);
 
@@ -1047,8 +1055,7 @@ export async function startQueueProcess() {
     "Verify",
     {},
     {
-      repeat: { cron: "*/5 * * * * *", key: "verify" },
-      removeOnComplete: true
+      repeat: { cron: "*/5 * * * * *", key: "verify" }
     }
   );
 
@@ -1056,8 +1063,7 @@ export async function startQueueProcess() {
     "VerifyCampaigns",
     {},
     {
-      repeat: { cron: "*/20 * * * * *", key: "verify-campaing" },
-      removeOnComplete: true
+      repeat: { cron: "*/20 * * * * *", key: "verify-campaing" }
     }
   );
 
@@ -1065,8 +1071,7 @@ export async function startQueueProcess() {
     "VerifyAndFinalizeCampaigns",
     {},
     {
-      repeat: { cron: "*/10 * * * *", key: "verify-and-finalize-campaigns" }, // A cada 10 minutos
-      removeOnComplete: true
+      repeat: { cron: "*/10 * * * *", key: "verify-and-finalize-campaigns" } // A cada 10 minutos
     }
   );
 
@@ -1074,8 +1079,7 @@ export async function startQueueProcess() {
     "VerifyLoginStatus",
     {},
     {
-      repeat: { cron: "* * * * *", key: "verify-login" },
-      removeOnComplete: true
+      repeat: { cron: "* * * * *", key: "verify-login" }
     }
   );
 
@@ -1083,8 +1087,7 @@ export async function startQueueProcess() {
     "VerifyQueueStatus",
     {},
     {
-      repeat: { cron: "*/20 * * * * *" },
-      removeOnComplete: true
+      repeat: { cron: "*/20 * * * * *" }
     }
   );
 }
