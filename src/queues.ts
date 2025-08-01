@@ -539,32 +539,57 @@ async function verifyAndFinalizeCampaign(campaign) {
 
 
 async function handleProcessCampaign(job) {
+  const { id }: ProcessCampaignData = job.data;
+  logger.info(`[handleProcessCampaign] Iniciando processamento da campanha: ${id}`);
+  monitoringLogger.info(`[handleProcessCampaign] Iniciando processamento da campanha: ${id}`);
+
   try {
-    const { id }: ProcessCampaignData = job.data;
-    monitoringLogger.info(`[DEBUG] Processando campanha: ${id}`);
-    
-    const campaign = await getCampaign(id);
+    const campaign = await Campaign.findByPk(id, {
+      include: [
+        { model: ContactList, as: "contactList", attributes: ["id", "name"] },
+        { model: Whatsapp, as: "whatsapp", attributes: ["id", "name"] }
+      ]
+    });
+
     if (!campaign) {
-      monitoringLogger.error(`[DEBUG] Campanha não encontrada: ${id}`);
+      logger.error(`[handleProcessCampaign] Campanha não encontrada: ${id}`);
+      monitoringLogger.error(`[handleProcessCampaign] Campanha não encontrada: ${id}`);
       return;
     }
-    
-    monitoringLogger.info(`[DEBUG] Campanha encontrada: ${id}, status: ${campaign.status}`);
-    
-    const settings = await getSettings(campaign);
-    if (campaign) {
-      const contactListId = campaign.contactList.id;
-      if (!contactListId) {
-        monitoringLogger.error(`[DEBUG] ID da lista de contatos não encontrada para campanha: ${id}`);
-        return;
-      }
-      
-      const BATCH_SIZE = 100; // Define o tamanho do lote
-      let offset = 0;
-      let hasMoreContacts = true;
 
-      while (hasMoreContacts) {
-        const { count, rows: contacts } = await ContactListItem.findAndCountAll({
+    logger.info(`[handleProcessCampaign] Campanha encontrada: ${id}, status: ${campaign.status}`);
+    monitoringLogger.info(`[handleProcessCampaign] Campanha encontrada: ${id}, status: ${campaign.status}`);
+
+    if (campaign.status !== 'AGENDADA') {
+      logger.warn(`[handleProcessCampaign] Campanha ${id} não está com status AGENDADA. Status atual: ${campaign.status}. Abortando.`);
+      monitoringLogger.warn(`[handleProcessCampaign] Campanha ${id} não está com status AGENDADA. Status atual: ${campaign.status}. Abortando.`);
+      return;
+    }
+
+    const settings = await getSettings(campaign);
+    const contactListId = campaign.contactList?.id;
+
+    if (!contactListId) {
+      logger.error(`[handleProcessCampaign] ID da lista de contatos não encontrada para campanha: ${id}`);
+      monitoringLogger.error(`[handleProcessCampaign] ID da lista de contatos não encontrada para campanha: ${id}`);
+      await campaign.update({ status: "ERRO" });
+      return;
+    }
+
+    await campaign.update({ status: "EM_ANDAMENTO" });
+    logger.info(`[handleProcessCampaign] Status da campanha ${id} atualizado para EM_ANDAMENTO.`);
+    monitoringLogger.info(`[handleProcessCampaign] Status da campanha ${id} atualizado para EM_ANDAMENTO.`);
+
+    const BATCH_SIZE = 100;
+    let offset = 0;
+    let hasMoreContacts = true;
+    let totalContactsProcessed = 0;
+    let delayInSeconds = 0;
+
+    while (hasMoreContacts) {
+      monitoringLogger.info(`[handleProcessCampaign] Buscando lote de contatos para campanha ${id}. Offset: ${offset}`);
+      try {
+        const contacts = await ContactListItem.findAll({
           where: { contactListId, isWhatsappValid: true },
           limit: BATCH_SIZE,
           offset: offset,
@@ -573,68 +598,60 @@ async function handleProcessCampaign(job) {
 
         if (contacts.length === 0) {
           hasMoreContacts = false;
+          monitoringLogger.info(`[handleProcessCampaign] Não há mais contatos para processar na campanha ${id}.`);
           break;
         }
 
-        monitoringLogger.info(`[DEBUG] Contatos encontrados no lote (offset: ${offset}): ${contacts.length} para campanha: ${id}`);
-      
-        const contactData = contacts.map(contact => ({
-          contactId: contact.id,
-          campaignId: campaign.id,
-          variables: settings.variables
-        }));
+        monitoringLogger.info(`[handleProcessCampaign] ${contacts.length} contatos encontrados no lote para campanha ${id}.`);
 
-        const {
-          messageInterval,
-          longerIntervalAfter,
-          greaterInterval,
-          variables
-        } = settings;
-
-        let delay = 0;
+        const { messageInterval, longerIntervalAfter, greaterInterval, variables } = settings;
         const queuePromises = [];
-        for (let i = 0; i < contactData.length; i++) {
-          const { contactId, campaignId } = contactData[i];
 
-          if (i > 0) {
-            if (longerIntervalAfter > 0 && i % longerIntervalAfter === 0) {
-              delay += greaterInterval;
-            } else {
-              delay += messageInterval;
-            }
+        for (const contact of contacts) {
+          if (totalContactsProcessed > 0) {
+            delayInSeconds += (longerIntervalAfter > 0 && totalContactsProcessed % longerIntervalAfter === 0) 
+              ? greaterInterval 
+              : messageInterval;
           }
 
-          monitoringLogger.info(`[handleProcessCampaign] Adicionando job 'PrepareContact' para o contato ${contactId} na fila.`);
-          const queuePromise = campaignQueue.add(
-            "PrepareContact",
-            { contactId, campaignId, variables, delay: delay * 1000 }, // convertendo para milissegundos
-          );
-          monitoringLogger.info(`[handleProcessCampaign] Job 'PrepareContact' para o contato ${contactId} adicionado com sucesso.`);
-
-          queuePromises.push(queuePromise);
-          monitoringLogger.info(
-            `Registro enviado pra fila de disparo: Campanha=${campaign.id};Contato=${contacts[i].name};delay=${delay}`
-          );
+          const jobData = {
+            contactId: contact.id,
+            campaignId: campaign.id,
+            variables,
+            delay: delayInSeconds * 1000
+          };
+          
+          monitoringLogger.info(`[handleProcessCampaign] Adicionando job 'PrepareContact' para contato ${contact.id} com delay de ${jobData.delay}ms.`);
+          queuePromises.push(campaignQueue.add("PrepareContact", jobData));
+          totalContactsProcessed++;
         }
-        await Promise.all(queuePromises);
-        monitoringLogger.info(`[DEBUG] Todos os jobs PrepareContact do lote adicionados para campanha: ${campaign.id}`);
-        campaignShippingLogger.info(`[Campanha: ${campaign.id}] Lote de ${contacts.length} contatos (offset: ${offset}) enviado para a fila de preparação.`);
-        
-        offset += BATCH_SIZE;
-      }
-      
-      monitoringLogger.info(`[DEBUG] Todos os jobs PrepareContact adicionados para campanha: ${campaign.id}`);
-      campaignShippingLogger.info(`[Campanha: ${campaign.id}] Todos os contatos da campanha foram enviados para a fila de preparação.`);
 
-      await campaign.update({ status: "EM_ANDAMENTO" });
-      monitoringLogger.info(`[DEBUG] Status da campanha atualizado para EM_ANDAMENTO: ${campaign.id}`);
-    } else {
-      monitoringLogger.error(`[DEBUG] Campanha inválida: ${id}`);
+        await Promise.all(queuePromises);
+        campaignShippingLogger.info(`[Campanha: ${campaign.id}] Lote de ${contacts.length} contatos (offset: ${offset}) enviado para a fila de preparação.`);
+        offset += BATCH_SIZE;
+
+      } catch (error) {
+        logger.error(`[handleProcessCampaign] Erro ao buscar ou enfileirar contatos para campanha ${id}: ${error.message}`);
+        monitoringLogger.error(`[handleProcessCampaign] Erro ao buscar ou enfileirar contatos para campanha ${id}: ${error.message}`);
+        hasMoreContacts = false;
+        await campaign.update({ status: "ERRO" });
+      }
     }
+    logger.info(`[handleProcessCampaign] Finalizado o enfileiramento de contatos para a campanha ${id}. Total: ${totalContactsProcessed}`);
+    monitoringLogger.info(`[handleProcessCampaign] Finalizado o enfileiramento de contatos para a campanha ${id}. Total: ${totalContactsProcessed}`);
   } catch (err: any) {
     Sentry.captureException(err);
-    monitoringLogger.error(`[DEBUG] Erro ao processar campanha: ${err.message}`);
-    console.log(err.stack);
+    logger.error(`[handleProcessCampaign] Erro catastrófico ao processar campanha ${id}: ${err.message}`);
+    monitoringLogger.error(`[handleProcessCampaign] Erro catastrófico ao processar campanha ${id}: ${err.message}`);
+    try {
+      const campaign = await Campaign.findByPk(id);
+      if (campaign) {
+        await campaign.update({ status: "ERRO" });
+      }
+    } catch (updateErr: any) {
+      logger.error(`[handleProcessCampaign] Erro ao tentar atualizar campanha ${id} para ERRO: ${updateErr.message}`);
+      monitoringLogger.error(`[handleProcessCampaign] Erro ao tentar atualizar campanha ${id} para ERRO: ${updateErr.message}`);
+    }
   }
 }
 

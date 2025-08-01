@@ -1,14 +1,29 @@
-import pino from "pino";
+import winston from "winston";
+import path from "path";
 
-const logger = pino({
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      levelFirst: true,
-      translateTime: true,
-      colorize: true,
-    }
-  }
+const logDir = process.cwd();
+
+const logger = winston.createLogger({
+  level: "info",
+  format: winston.format.combine(
+    winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss.SSS" }),
+    winston.format.printf(({ timestamp, level, message, ...meta }) => {
+      return `${timestamp} [${level.toUpperCase()}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''}`;
+    })
+  ),
+  transports: [
+    new winston.transports.File({
+      filename: path.join(logDir, "logSistema.txt"),
+      maxsize: 5242880, // 5MB
+      maxFiles: 5,
+    }),
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    })
+  ]
 });
 
 export { logger };
