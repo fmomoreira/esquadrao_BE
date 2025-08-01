@@ -8,7 +8,7 @@ const logDir = process.cwd();
 const logger = pino({
   // Define o nível de log mais baixo para garantir que tudo seja capturado.
   // O nível de cada transporte (console, arquivo) será definido individualmente.
-  level: "silly", 
+  level: "trace", // O nível mais baixo do Pino é "trace", não "silly".
   transport: {
     targets: [
       {
@@ -25,7 +25,7 @@ const logger = pino({
       {
         // Configuração para o arquivo de log
         target: 'pino/file',
-        level: 'silly', // Grava todos os níveis de log no arquivo, incluindo 'trace' do Baileys
+        level: 'trace', // Grava todos os níveis de log no arquivo, incluindo 'trace' do Baileys
         options: { 
           destination: path.join(logDir, "logSistema.txt"),
           mkdir: true // Cria o diretório se ele não existir

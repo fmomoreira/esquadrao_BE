@@ -23,7 +23,7 @@ const app = express();
 app.get("/metrics", metrics);
 
 app.use(cors({
-  origin: "https://wp.eupromovo.com.br",
+  origin: ["https://wp.eupromovo.com.br"],
   credentials: true,
 }));
 
