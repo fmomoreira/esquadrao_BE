@@ -20,7 +20,7 @@ const devConfig = {
   password: "Tech@Esquadrao2025**@",
   logging: console.log,
   pool: {
-    max: 10,
+    max: 150,
     min: 0,
     idle: 3000
   },
