@@ -8,6 +8,7 @@ import { Op, QueryTypes } from "sequelize";
 import sequelize from "./database";
 import GetDefaultWhatsApp from "./helpers/GetDefaultWhatsApp";
 import GetWhatsappWbot from "./helpers/GetWhatsappWbot";
+import { getWbot } from "./libs/wbot";
 import formatBody from "./helpers/Mustache";
 import { MessageData, SendMessage } from "./helpers/SendMessage";
 import { getIO } from "./libs/socket";
@@ -765,38 +766,24 @@ async function handlePrepareContact(job) {
 }
 
 async function handleDispatchCampaign(job) {
-  const { data } = job;
-  const { campaignShippingId, campaignId }: DispatchCampaignData = data;
-  let campaignShipping: CampaignShipping | null = null;
+  const { campaignShippingId, campaignId }: DispatchCampaignData = job.data;
+  monitoringLogger.info(`[DispatchCampaign] Iniciando envio para CampaignShipping: ${campaignShippingId}`);
 
+  let campaignShipping;
+  let campaign;
+  
   try {
-    const campaign = await getCampaign(campaignId);
-    const wbot = await GetWhatsappWbot(campaign.whatsapp);
+    campaign = await Campaign.findByPk(campaignId, {
+      include: [
+        { model: ContactList, as: "contactList", attributes: ["id", "name"] },
+        { model: Whatsapp, as: "whatsapp", attributes: ["id", "name"] }
+      ]
+    });
 
-    if (!wbot) {
-      monitoringLogger.error(
-        `campaignQueue -> DispatchCampaign -> error: wbot not found`
-      );
-      throw new Error("Wbot not found");
+    if (!campaign) {
+      monitoringLogger.error(`[DispatchCampaign] Campaign not found for ID: ${campaignId}`);
+      return;
     }
-
-    if (!campaign.whatsapp) {
-      monitoringLogger.error(
-        `campaignQueue -> DispatchCampaign -> error: whatsapp not found`
-      );
-      throw new Error("Whatsapp not found for campaign");
-    }
-
-    if (!wbot?.user?.id) {
-      monitoringLogger.error(
-        `campaignQueue -> DispatchCampaign -> error: wbot user not found`
-      );
-      throw new Error("Wbot user not found");
-    }
-
-    monitoringLogger.info(
-      `Disparo de campanha solicitado: Campanha=${campaignId};Registro=${campaignShippingId}`
-    );
 
     campaignShipping = await CampaignShipping.findByPk(
       campaignShippingId,
@@ -815,11 +802,37 @@ async function handleDispatchCampaign(job) {
       return;
     }
 
+    // Verificar se isDeliveredSuccessfully já foi definido
+    if (campaignShipping.isDeliveredSuccessfully !== null) {
+      monitoringLogger.info(`[DispatchCampaign] CampaignShipping ${campaignShippingId} already has delivery status: ${campaignShipping.isDeliveredSuccessfully}`);
+      return;
+    }
+
+    const wbot = getWbot(campaign.whatsapp.id);
+    if (!wbot) {
+      monitoringLogger.error(`[DispatchCampaign] WhatsApp connection not found for campaign: ${campaignId}`);
+      // Marcar como falha se não há conexão WhatsApp
+      await updateCampaignShippingStatus(campaignShipping, false, null, 'WhatsApp connection not available');
+      return;
+    }
+
     // Definir variáveis necessárias
     const chatId = `${campaignShipping.number}@c.us`;
     let body = campaignShipping.message || "";
     let sentMessageResult;
+    let messagesSent = false;
 
+    // Implementar timeout para envio de mensagem
+    const sendMessageWithTimeout = async (wbot, chatId, messageData, timeoutMs = 30000) => {
+      return Promise.race([
+        wbot.sendMessage(chatId, messageData),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Message send timeout')), timeoutMs)
+        )
+      ]);
+    };
+
+    // Envio de arquivos da lista
     if (!isNil(campaign.fileListId)) {
       try {
         const publicFolder = path.resolve(__dirname, "..", "public");
@@ -834,15 +847,17 @@ async function handleDispatchCampaign(job) {
             path.resolve(folder, file.path),
             file.name
           );
-          sentMessageResult = await wbot.sendMessage(chatId, { ...options });
+          sentMessageResult = await sendMessageWithTimeout(wbot, chatId, { ...options });
           monitoringLogger.debug(`[DispatchCampaign] Media message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
+          messagesSent = true;
         }
       } catch (error) {
-        monitoringLogger.info(error);
+        monitoringLogger.error(`[DispatchCampaign] Error sending file list: ${error.message}`);
         throw error;
       }
     }
 
+    // Envio de mídia
     if (campaign.mediaPath) {
       const publicFolder = path.resolve(__dirname, "..", "public");
       const filePath = path.join(publicFolder, campaign.mediaPath);
@@ -853,35 +868,47 @@ async function handleDispatchCampaign(job) {
         body
       );
       if (Object.keys(options).length) {
-        sentMessageResult = await wbot.sendMessage(chatId, { ...options });
+        sentMessageResult = await sendMessageWithTimeout(wbot, chatId, { ...options });
         monitoringLogger.debug(`[DispatchCampaign] Media message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
+        messagesSent = true;
       }
     } else {
+      // Envio de mensagem de texto
       if (campaign.confirmation && campaignShipping.confirmation === null) {
-        sentMessageResult = await wbot.sendMessage(chatId, {
+        sentMessageResult = await sendMessageWithTimeout(wbot, chatId, {
           text: body
         });
         monitoringLogger.debug(`[DispatchCampaign] Confirmation message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
         await campaignShipping.update({ confirmationRequestedAt: moment() });
+        messagesSent = true;
       } else {
-        sentMessageResult = await wbot.sendMessage(chatId, {
+        sentMessageResult = await sendMessageWithTimeout(wbot, chatId, {
           text: body
         });
         monitoringLogger.debug(`[DispatchCampaign] Text message sent. Raw response: ${JSON.stringify(sentMessageResult)}`);
+        messagesSent = true;
       }
     }
 
+    // Validar resultado do envio
     const messageIdToStore = sentMessageResult?.key?.id || null;
-    monitoringLogger.debug(`[DispatchCampaign] messageId to store: ${messageIdToStore}`);
+    const isSuccess = messageIdToStore !== null && messagesSent;
+    
+    monitoringLogger.debug(`[DispatchCampaign] messageId to store: ${messageIdToStore}, isSuccess: ${isSuccess}`);
 
-    // Atualiza CampaignShipping com status de sucesso ou falha de envio
-    await campaignShipping.update({
-      deliveredAt: moment(),
-      messageId: messageIdToStore,
-      isDeliveredSuccessfully: messageIdToStore !== null ? 1 : 0
-    });
+    // Atualizar status do envio
+    await updateCampaignShippingStatus(
+      campaignShipping, 
+      isSuccess, 
+      messageIdToStore, 
+      isSuccess ? 'Message sent successfully' : 'Message send failed - no messageId returned'
+    );
 
-    campaignShippingLogger.info(`[Campanha: ${campaignId} | Contato: ${campaignShipping.contact.id}] Mensagem enviada com sucesso. MessageId: ${messageIdToStore}`);
+    if (isSuccess) {
+      campaignShippingLogger.info(`[Campanha: ${campaignId} | Contato: ${campaignShipping.contact.id}] Mensagem enviada com sucesso. MessageId: ${messageIdToStore}`);
+    } else {
+      campaignShippingLogger.warn(`[Campanha: ${campaignId} | Contato: ${campaignShipping.contact.id}] Falha no envio - messageId não retornado`);
+    }
 
     await verifyAndFinalizeCampaign(campaign);
 
@@ -895,27 +922,154 @@ async function handleDispatchCampaign(job) {
     );
 
     monitoringLogger.info(
-      `Campanha enviada para: Campanha=${campaignId};Contato=${campaignShipping.contact.name}`
+      `Campanha processada para: Campanha=${campaignId};Contato=${campaignShipping.contact.name};Status=${isSuccess ? 'SUCCESS' : 'FAILED'}`
     );
+    
   } catch (err: any) {
     Sentry.captureException(err);
     monitoringLogger.error(`[DispatchCampaign] Error sending message for CampaignShipping ${campaignShippingId}: ${err.message}`);
     console.log(err.stack);
 
-    // Se ocorreu um erro, atualiza CampaignShipping para refletir a falha
+    // Garantir que o status seja sempre atualizado em caso de erro
     if (campaignShipping) {
+      await updateCampaignShippingStatus(campaignShipping, false, null, `Error: ${err.message}`);
+    }
+    
+    // Ainda tentar verificar e finalizar a campanha mesmo com erro
+    if (campaign) {
       try {
-        await campaignShipping.update({
-          deliveredAt: moment(),
-          isDeliveredSuccessfully: 0,
-          messageId: null
-        });
-        monitoringLogger.info(`[DispatchCampaign] CampaignShipping ${campaignShipping.id} marked as failed due to error.`);
-      } catch (updateErr: any) {
-        Sentry.captureException(updateErr);
-        monitoringLogger.error(`[DispatchCampaign] Error updating CampaignShipping to failed status for ID ${campaignShippingId}: ${updateErr.message}`);
+        await verifyAndFinalizeCampaign(campaign);
+      } catch (verifyErr: any) {
+        monitoringLogger.error(`[DispatchCampaign] Error verifying campaign finalization: ${verifyErr.message}`);
       }
     }
+  }
+}
+
+// Função auxiliar para atualizar status do CampaignShipping de forma consistente
+async function updateCampaignShippingStatus(
+  campaignShipping: any, 
+  isSuccess: boolean, 
+  messageId: string | null, 
+  reason: string
+) {
+  try {
+    await campaignShipping.update({
+      deliveredAt: moment(),
+      messageId: messageId,
+      isDeliveredSuccessfully: isSuccess ? 1 : 0
+    });
+    
+    monitoringLogger.info(
+      `[updateCampaignShippingStatus] CampaignShipping ${campaignShipping.id} updated: ` +
+      `isDeliveredSuccessfully=${isSuccess ? 1 : 0}, messageId=${messageId}, reason=${reason}`
+    );
+  } catch (updateErr: any) {
+    Sentry.captureException(updateErr);
+    monitoringLogger.error(
+      `[updateCampaignShippingStatus] Error updating CampaignShipping ${campaignShipping.id}: ${updateErr.message}`
+    );
+    throw updateErr;
+  }
+}
+
+// Função para limpar registros órfãos de CampaignShipping
+async function handleCleanupOrphanedCampaignShipping(job) {
+  monitoringLogger.info('[CleanupOrphanedCampaignShipping] Iniciando limpeza de registros órfãos');
+  
+  try {
+    // Buscar registros onde isDeliveredSuccessfully é null há mais de 2 horas
+    // Tempo maior para evitar conflito com campanhas de longa duração
+    const orphanedRecords = await CampaignShipping.findAll({
+      where: {
+        isDeliveredSuccessfully: null,
+        createdAt: {
+          [Op.lt]: moment().subtract(2, 'hours').toDate()
+        }
+      },
+      include: [
+        { model: ContactListItem, as: "contact" },
+        { model: Campaign, as: "campaign" }
+      ],
+      limit: 50 // Processar em lotes menores para ser mais conservador
+    });
+
+    if (orphanedRecords.length === 0) {
+      monitoringLogger.debug('[CleanupOrphanedCampaignShipping] Nenhum registro órfão encontrado');
+      return;
+    }
+
+    monitoringLogger.info(`[CleanupOrphanedCampaignShipping] Encontrados ${orphanedRecords.length} registros potencialmente órfãos para análise`);
+
+    // Obter jobs pendentes na fila para verificar se algum registro ainda tem job ativo
+    const pendingJobs = await campaignQueue.getJobs(['waiting', 'delayed', 'active']);
+    const pendingJobIds = new Set(pendingJobs.map(job => job.id?.toString()));
+    const pendingCampaignShippingIds = new Set(
+      pendingJobs
+        .filter(job => job.name === 'DispatchCampaign' && job.data?.campaignShippingId)
+        .map(job => job.data.campaignShippingId.toString())
+    );
+
+    monitoringLogger.info(`[CleanupOrphanedCampaignShipping] Jobs pendentes na fila: ${pendingJobs.length}`);
+    monitoringLogger.info(`[CleanupOrphanedCampaignShipping] CampaignShipping IDs com jobs pendentes: ${pendingCampaignShippingIds.size}`);
+
+    let cleanedCount = 0;
+    let skippedCount = 0;
+    
+    for (const record of orphanedRecords) {
+      try {
+        // Verificar se o registro tem um job pendente na fila
+        const hasJobInQueue = record.jobId && pendingJobIds.has(record.jobId);
+        const hasDispatchJobPending = pendingCampaignShippingIds.has(record.id.toString());
+        
+        if (hasJobInQueue || hasDispatchJobPending) {
+          monitoringLogger.info(
+            `[CleanupOrphanedCampaignShipping] Pulando registro ${record.id} - ainda tem job pendente na fila ` +
+            `(jobId: ${record.jobId}, hasJobInQueue: ${hasJobInQueue}, hasDispatchJobPending: ${hasDispatchJobPending})`
+          );
+          skippedCount++;
+          continue;
+        }
+
+        // Verificar se a campanha ainda está ativa
+        if (record.campaign && record.campaign.status === 'EM_ANDAMENTO') {
+          // Para campanhas ativas, ser ainda mais conservador - só limpar após 6 horas
+          const isVeryOld = moment(record.createdAt).isBefore(moment().subtract(6, 'hours'));
+          if (!isVeryOld) {
+            monitoringLogger.info(
+              `[CleanupOrphanedCampaignShipping] Pulando registro ${record.id} - campanha ativa e registro não é muito antigo`
+            );
+            skippedCount++;
+            continue;
+          }
+        }
+
+        // Agora sim, marcar como falha (0) - é realmente um registro órfão
+        await updateCampaignShippingStatus(
+          record,
+          false,
+          null,
+          `Cleanup: Marked as failed due to timeout (truly orphaned record, created: ${record.createdAt})`
+        );
+        cleanedCount++;
+        
+        // Verificar se a campanha pode ser finalizada após a limpeza
+        if (record.campaign) {
+          await verifyAndFinalizeCampaign(record.campaign);
+        }
+      } catch (err: any) {
+        Sentry.captureException(err);
+        monitoringLogger.error(`[CleanupOrphanedCampaignShipping] Erro ao processar registro ${record.id}: ${err.message}`);
+      }
+    }
+
+    monitoringLogger.info(
+      `[CleanupOrphanedCampaignShipping] Limpeza concluída: ${cleanedCount} limpos, ${skippedCount} pulados, ` +
+      `${orphanedRecords.length} analisados`
+    );
+  } catch (err: any) {
+    Sentry.captureException(err);
+    monitoringLogger.error(`[CleanupOrphanedCampaignShipping] Erro durante limpeza: ${err.message}`);
   }
 }
 
@@ -1059,6 +1213,8 @@ export async function startQueueProcess() {
 
   campaignQueue.process("VerifyAndFinalizeCampaigns", handleVerifyAndFinalizeCampaigns);
 
+  campaignQueue.process("CleanupOrphanedCampaignShipping", handleCleanupOrphanedCampaignShipping);
+
   userMonitor.process("VerifyLoginStatus", handleLoginStatus);
 
   //queueMonitor.process("VerifyQueueStatus", handleVerifyQueue);
@@ -1084,6 +1240,16 @@ export async function startQueueProcess() {
     {},
     {
       repeat: { cron: "*/10 * * * *", key: "verify-and-finalize-campaigns" } // A cada 10 minutos
+    }
+  );
+
+  // Job para limpeza de registros órfãos (executa a cada 30 minutos)
+  // Frequência reduzida para ser mais conservador com campanhas de longa duração
+  campaignQueue.add(
+    "CleanupOrphanedCampaignShipping",
+    {},
+    {
+      repeat: { cron: "*/30 * * * *", key: "cleanup-orphaned-campaign-shipping" } // A cada 30 minutos
     }
   );
 
